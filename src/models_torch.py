@@ -1,8 +1,5 @@
-# src/models_torch.py
 import torch
 import torch.nn as nn
-
-
 class MLPClassifierTorch(nn.Module):
     def __init__(self, input_dim: int):
         super().__init__()
@@ -17,10 +14,8 @@ class MLPClassifierTorch(nn.Module):
             nn.ReLU(),
             nn.Linear(64, 1),  # logits
         )
-
     def forward(self, x):
         return self.net(x).squeeze(-1)  # (batch,)
-
 
 class MLPRegressorTorch(nn.Module):
     def __init__(self, input_dim: int, output_dim: int = 3):

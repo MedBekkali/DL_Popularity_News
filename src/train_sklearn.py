@@ -1,48 +1,64 @@
 import argparse
 import json
+from dataclasses import replace
 import numpy as np
 from sklearn.linear_model import LogisticRegression, LinearRegression
+from sklearn.metrics import f1_score
+from sklearn.model_selection import train_test_split
 from sklearn.multioutput import MultiOutputRegressor
 from sklearn.neural_network import MLPClassifier, MLPRegressor
 from sklearn.preprocessing import StandardScaler
-
 from src.config import Config
 from src.data import load_dataset
 from src.targets import make_X_y
-from src.splitters import split_A_same_indices, split_B_independent
 from src.preprocess import make_x_preprocess, fit_transform_x
 from src.metrics import classification_metrics, regression_metrics
 
-
-def best_threshold_f1_macro(y_true, proba, thresholds=None):
-    if thresholds is None:
-        thresholds = np.linspace(0.05, 0.95, 19)
-
+def best_threshold_f1_macro(y_true: np.ndarray, proba: np.ndarray) -> tuple[float, float]:
+    thresholds = np.linspace(0.05, 0.95, 19)
     best_thr, best_f1 = 0.5, -1.0
-
-    # Actually compute macro-f1 properly:
-    from sklearn.metrics import f1_score
     for thr in thresholds:
         pred = (proba >= thr).astype(int)
         f1 = f1_score(y_true, pred, average="macro")
         if f1 > best_f1:
-            best_f1 = f1
+            best_f1 = float(f1)
             best_thr = float(thr)
-    return best_thr, float(best_f1)
+    return best_thr, best_f1
 
+def create_split(y_class: np.ndarray, cfg: Config):
+    idx = np.arange(len(y_class))
+
+    idx_trainval, idx_test = train_test_split(
+        idx,
+        test_size=cfg.test_size,
+        stratify=y_class,
+        random_state=cfg.random_state,
+    )
+
+    val_relative = cfg.val_size / (1.0 - cfg.test_size)
+
+    idx_train, idx_val = train_test_split(
+        idx_trainval,
+        test_size=val_relative,
+        stratify=y_class[idx_trainval],
+        random_state=cfg.random_state,
+    )
+    return idx_train, idx_val, idx_test
 
 def train_and_eval_classification(Xtr, Xva, Xte, ytr, yva, yte, cfg: Config):
+    # Baseline
     base = LogisticRegression(max_iter=2000, class_weight="balanced")
     base.fit(Xtr, ytr)
     base_pred = base.predict(Xte)
 
+    # MLP
     mlp = MLPClassifier(
         hidden_layer_sizes=(128, 64, 32),
         activation="relu",
         alpha=1e-4,
         early_stopping=True,
         random_state=cfg.random_state,
-        max_iter=300,
+        max_iter=400,
     )
     mlp.fit(Xtr, ytr)
 
@@ -57,21 +73,17 @@ def train_and_eval_classification(Xtr, Xva, Xte, ytr, yva, yte, cfg: Config):
         "pos_rate_test": float(np.mean(yte)),
         "baseline": classification_metrics(yte, base_pred),
         "mlp": classification_metrics(yte, mlp_pred),
-        "chosen_threshold": thr,
-        "val_best_f1_macro": best_f1,
+        "chosen_threshold": float(thr),
+        "val_best_f1_macro": float(best_f1),
     }
 
-
-def train_and_eval_regression(Xtr, Xva, Xte, Ytr, Yva, Yte, cfg: Config):
+def train_and_eval_regression(Xtr, Xte, Ytr, Yte, cfg: Config):
     base = MultiOutputRegressor(LinearRegression())
     base.fit(Xtr, Ytr)
     base_pred = base.predict(Xte)
 
-    # Critical: scale targets for MLP
     y_scaler = StandardScaler()
     Ytr_s = y_scaler.fit_transform(Ytr)
-    Yva_s = y_scaler.transform(Yva)
-    Yte_s = y_scaler.transform(Yte)
 
     mlp = MLPRegressor(
         hidden_layer_sizes=(128, 64, 32),
@@ -79,7 +91,7 @@ def train_and_eval_regression(Xtr, Xva, Xte, Ytr, Yva, Yte, cfg: Config):
         alpha=1e-4,
         early_stopping=True,
         random_state=cfg.random_state,
-        max_iter=400,
+        max_iter=600,
     )
     mlp.fit(Xtr, Ytr_s)
 
@@ -92,78 +104,57 @@ def train_and_eval_regression(Xtr, Xva, Xte, Ytr, Yva, Yte, cfg: Config):
     }
 
 
-def run_A(X, y_class, Y_reg, cfg: Config):
-    idx = split_A_same_indices(X, y_class, cfg)
-    X_train, X_val, X_test = X.iloc[idx["train"]], X.iloc[idx["val"]], X.iloc[idx["test"]]
-    ytr, yva, yte = y_class[idx["train"]], y_class[idx["val"]], y_class[idx["test"]]
-    Ytr, Yva, Yte = Y_reg[idx["train"]], Y_reg[idx["val"]], Y_reg[idx["test"]]
-
-    xprep = make_x_preprocess()
-    Xtr, Xva, Xte = fit_transform_x(xprep, X_train, X_val, X_test)
-
-    return {
-        "protocol": "A_same_split",
-        "classification": train_and_eval_classification(Xtr, Xva, Xte, ytr, yva, yte, cfg),
-        "regression": train_and_eval_regression(Xtr, Xva, Xte, Ytr, Yva, Yte, cfg),
-    }
-
-
-def run_B(X, y_class, Y_reg, cfg: Config):
-    idx = split_B_independent(X, y_class, Y_reg, cfg)
-
-    # classification
-    ic = idx["class"]
-    Xc_train, Xc_val, Xc_test = X.iloc[ic["train"]], X.iloc[ic["val"]], X.iloc[ic["test"]]
-    yc_tr, yc_va, yc_te = y_class[ic["train"]], y_class[ic["val"]], y_class[ic["test"]]
-
-    # regression
-    ir = idx["reg"]
-    Xr_train, Xr_val, Xr_test = X.iloc[ir["train"]], X.iloc[ir["val"]], X.iloc[ir["test"]]
-    Yr_tr, Yr_va, Yr_te = Y_reg[ir["train"]], Y_reg[ir["val"]], Y_reg[ir["test"]]
-
-    # separate X preprocessors (because different train sets)
-    xprep_c = make_x_preprocess()
-    Xc_tr, Xc_va, Xc_te = fit_transform_x(xprep_c, Xc_train, Xc_val, Xc_test)
-
-    xprep_r = make_x_preprocess()
-    Xr_tr, Xr_va, Xr_te = fit_transform_x(xprep_r, Xr_train, Xr_val, Xr_test)
-
-    return {
-        "protocol": "B_independent_splits",
-        "classification": train_and_eval_classification(Xc_tr, Xc_va, Xc_te, yc_tr, yc_va, yc_te, cfg),
-        "regression": train_and_eval_regression(Xr_tr, Xr_va, Xr_te, Yr_tr, Yr_va, Yr_te, cfg),
-    }
-
-
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--protocol", choices=["A", "B"], required=True)
     parser.add_argument("--viral_quantile", type=float, default=None)
+    parser.add_argument("--out", type=str, default=None)
     args = parser.parse_args()
 
     cfg = Config()
     if args.viral_quantile is not None:
-        cfg = Config(
-            data_path=cfg.data_path,
-            random_state=cfg.random_state,
-            test_size=cfg.test_size,
-            val_size=cfg.val_size,
-            viral_quantile=args.viral_quantile,
-            cap_quantile=cfg.cap_quantile,
-            eps=cfg.eps,
-            drop_cols=cfg.drop_cols,
-        )
+        cfg = replace(cfg, viral_quantile=float(args.viral_quantile))
 
+    print("Loading dataset...")
     df = load_dataset(cfg)
     X, y_class, Y_reg = make_X_y(df, cfg)
 
-    if args.protocol == "A":
-        res = run_A(X, y_class, Y_reg, cfg)
-    else:
-        res = run_B(X, y_class, Y_reg, cfg)
+    idx_train, idx_val, idx_test = create_split(y_class, cfg)
 
-    print(json.dumps(res, indent=2))
+    X_train, X_val, X_test = X.iloc[idx_train], X.iloc[idx_val], X.iloc[idx_test]
+    ytr, yva, yte = y_class[idx_train], y_class[idx_val], y_class[idx_test]
+    Ytr, Yte = Y_reg[idx_train], Y_reg[idx_test]
 
+    print(f"Train: {len(idx_train)} | Val: {len(idx_val)} | Test: {len(idx_test)} | Features: {X.shape[1]}")
+    print(f"Class positive rate (Train/Val/Test): {ytr.mean():.3f} / {yva.mean():.3f} / {yte.mean():.3f}")
+
+    xprep = make_x_preprocess()
+    Xtr, Xva, Xte = fit_transform_x(xprep, X_train, X_val, X_test)
+
+    cls_res = train_and_eval_classification(Xtr, Xva, Xte, ytr, yva, yte, cfg)
+    reg_res = train_and_eval_regression(Xtr, Xte, Ytr, Yte, cfg)
+
+    results = {
+        "protocol": "A_same_split",
+        "config": {
+            "test_size": cfg.test_size,
+            "val_size": cfg.val_size,
+            "random_state": cfg.random_state,
+            "viral_quantile": cfg.viral_quantile,
+            "cap_quantile": getattr(cfg, "cap_quantile", None),
+        },
+        "results": {
+            "classification": cls_res,
+            "regression": reg_res,
+        }
+    }
+    print("==================================================")
+    print("Classification:", cls_res["mlp"])
+    print("Regression:", reg_res["mlp"])
+
+    out_path = args.out or f"results_sklearn_{cfg.random_state}.json"
+    with open(out_path, "w", encoding="utf-8") as f:
+        json.dump(results, f, indent=2)
+    print(f"\nResults saved to {out_path}")
 
 if __name__ == "__main__":
     main()

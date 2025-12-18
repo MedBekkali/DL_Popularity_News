@@ -1,0 +1,12 @@
+# Core
+numpy>=1.26
+pandas>=2.1
+scipy>=1.11
+
+# ML / DL
+scikit-learn>=1.4
+tensorflow>=2.15
+torch>=2.2
+
+# Utilities
+tqdm>=4.66

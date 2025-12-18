@@ -5,11 +5,7 @@
     "random_state": 42,
     "viral_quantile": 0.75,
     "device": "cpu",
-    "y2_cap_quantile": 0.99,
-    "lr": 0.0003,
-    "weight_decay": 0.0001,
-    "patience": 25,
-    "dropout": 0.1
+    "y2_cap_quantile": 0.99
   },
   "results": {
     "classification": {
