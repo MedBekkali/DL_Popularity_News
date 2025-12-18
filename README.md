@@ -1,9 +1,9 @@
 # DL_Popularity — MLPs pour Classification et Régression Multi-sorties (UCI Online News Popularity)
 
-Projet de Deep Learning (ESAIP) : implémentation et comparaison de MLP/DNN sur **données structurées** pour :
 - Mohammed BEKKALI
 - Mohamed Reda El AMRANI
 - Corel TOUKO
+Projet de Deep Learning (ESAIP) : implémentation et comparaison de MLP/DNN sur **données structurées** pour :
 - une tâche de **classification binaire** (article viral / non viral),
 - une tâche de **régression multi-sorties** (3 sorties continues).
 
